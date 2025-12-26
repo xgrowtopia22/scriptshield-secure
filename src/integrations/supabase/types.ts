@@ -14,7 +14,80 @@ export type Database = {
   }
   public: {
     Tables: {
-      [_ in never]: never
+      hwid_keys: {
+        Row: {
+          access_key: string
+          created_at: string
+          expires_at: string
+          hwid: string
+          id: string
+          is_active: boolean
+          script_id: string
+        }
+        Insert: {
+          access_key: string
+          created_at?: string
+          expires_at: string
+          hwid: string
+          id?: string
+          is_active?: boolean
+          script_id: string
+        }
+        Update: {
+          access_key?: string
+          created_at?: string
+          expires_at?: string
+          hwid?: string
+          id?: string
+          is_active?: boolean
+          script_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "hwid_keys_script_id_fkey"
+            columns: ["script_id"]
+            isOneToOne: false
+            referencedRelation: "scripts"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      scripts: {
+        Row: {
+          created_at: string
+          id: string
+          key_expiry_hours: number
+          key_system_enabled: boolean
+          loader_script: string
+          name: string
+          obfuscated_script: string
+          original_script: string
+          updated_at: string
+        }
+        Insert: {
+          created_at?: string
+          id?: string
+          key_expiry_hours?: number
+          key_system_enabled?: boolean
+          loader_script: string
+          name: string
+          obfuscated_script: string
+          original_script: string
+          updated_at?: string
+        }
+        Update: {
+          created_at?: string
+          id?: string
+          key_expiry_hours?: number
+          key_system_enabled?: boolean
+          loader_script?: string
+          name?: string
+          obfuscated_script?: string
+          original_script?: string
+          updated_at?: string
+        }
+        Relationships: []
+      }
     }
     Views: {
       [_ in never]: never

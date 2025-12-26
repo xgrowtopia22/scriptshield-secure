@@ -5,9 +5,10 @@ import { cn } from "@/lib/utils";
 
 interface HWIDDisplayProps {
   className?: string;
+  onHWIDGenerated?: (hwid: string) => void;
 }
 
-const HWIDDisplay = ({ className }: HWIDDisplayProps) => {
+const HWIDDisplay = ({ className, onHWIDGenerated }: HWIDDisplayProps) => {
   const [hwid, setHwid] = useState<string>("");
   const [copied, setCopied] = useState(false);
   const [generating, setGenerating] = useState(true);
@@ -25,8 +26,12 @@ const HWIDDisplay = ({ className }: HWIDDisplayProps) => {
         }
         segments.push(segment);
       }
-      setHwid(segments.join("-"));
+      const generatedHwid = segments.join("-");
+      setHwid(generatedHwid);
       setGenerating(false);
+      if (onHWIDGenerated) {
+        onHWIDGenerated(generatedHwid);
+      }
     }, 1500);
   };
 

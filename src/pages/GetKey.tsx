@@ -1,32 +1,70 @@
 import { useState, useEffect } from "react";
 import { useSearchParams } from "react-router-dom";
-import { Key, Shield, Clock, CheckCircle, XCircle, Loader2, ExternalLink, Copy, Check } from "lucide-react";
+import { Key, Shield, Clock, CheckCircle, XCircle, Loader2, Copy, Check, AlertCircle } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import Navbar from "@/components/Navbar";
 import HWIDDisplay from "@/components/HWIDDisplay";
 import { toast } from "@/hooks/use-toast";
+import { supabase } from "@/integrations/supabase/client";
 
 const GetKey = () => {
   const [searchParams] = useSearchParams();
   const scriptId = searchParams.get("script");
   
   const [step, setStep] = useState(1);
+  const [hwid, setHwid] = useState<string | null>(null);
+  const [scriptName, setScriptName] = useState<string | null>(null);
   const [isVerifying, setIsVerifying] = useState(false);
   const [generatedKey, setGeneratedKey] = useState<string | null>(null);
   const [keyExpiry, setKeyExpiry] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
   const [countdown, setCountdown] = useState(0);
+  const [error, setError] = useState<string | null>(null);
 
-  const linkSteps = [
-    { name: "Linkvertise", url: "https://linkvertise.com" },
-    { name: "Complete Captcha", url: "#" },
-  ];
+  // Fetch script info
+  useEffect(() => {
+    if (scriptId) {
+      fetchScriptInfo();
+    }
+  }, [scriptId]);
+
+  const fetchScriptInfo = async () => {
+    const { data, error } = await supabase
+      .from('scripts')
+      .select('name, key_system_enabled')
+      .eq('id', scriptId)
+      .maybeSingle();
+
+    if (error || !data) {
+      setError("Script tidak ditemukan.");
+      return;
+    }
+
+    if (!data.key_system_enabled) {
+      setError("Script ini tidak memerlukan key.");
+      return;
+    }
+
+    setScriptName(data.name);
+  };
+
+  const handleHWIDGenerated = (generatedHwid: string) => {
+    setHwid(generatedHwid);
+  };
 
   const handleStartVerification = () => {
+    if (!hwid) {
+      toast({
+        title: "Error",
+        description: "Mohon generate HWID terlebih dahulu.",
+        variant: "destructive",
+      });
+      return;
+    }
     setStep(2);
-    setCountdown(15);
+    setCountdown(10);
   };
 
   useEffect(() => {
@@ -39,42 +77,58 @@ const GetKey = () => {
   }, [countdown, step]);
 
   const handleGenerateKey = async () => {
+    if (!scriptId || !hwid) {
+      toast({
+        title: "Error",
+        description: "Missing script ID or HWID.",
+        variant: "destructive",
+      });
+      return;
+    }
+
     setIsVerifying(true);
     
-    await new Promise(resolve => setTimeout(resolve, 2000));
-    
-    // Generate a random key
-    const chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
-    const segments = [];
-    for (let i = 0; i < 4; i++) {
-      let segment = "";
-      for (let j = 0; j < 5; j++) {
-        segment += chars.charAt(Math.floor(Math.random() * chars.length));
+    try {
+      const { data, error } = await supabase.functions.invoke('generate-key', {
+        body: { scriptId, hwid }
+      });
+
+      if (error) {
+        throw error;
       }
-      segments.push(segment);
+
+      if (!data.success) {
+        throw new Error(data.message);
+      }
+
+      setGeneratedKey(data.key);
+      
+      // Format expiry date
+      const expiryDate = new Date(data.expires_at);
+      setKeyExpiry(expiryDate.toLocaleDateString("id-ID", {
+        day: "numeric",
+        month: "long",
+        year: "numeric",
+        hour: "2-digit",
+        minute: "2-digit",
+      }));
+      
+      setStep(4);
+      
+      toast({
+        title: "Key Generated!",
+        description: "Key kamu berhasil dibuat dan siap digunakan.",
+      });
+    } catch (error: any) {
+      console.error('Error generating key:', error);
+      toast({
+        title: "Error",
+        description: error.message || "Gagal generate key.",
+        variant: "destructive",
+      });
+    } finally {
+      setIsVerifying(false);
     }
-    
-    const key = segments.join("-");
-    setGeneratedKey(key);
-    
-    // Set expiry (7 days from now)
-    const expiryDate = new Date();
-    expiryDate.setDate(expiryDate.getDate() + 7);
-    setKeyExpiry(expiryDate.toLocaleDateString("id-ID", {
-      day: "numeric",
-      month: "long",
-      year: "numeric",
-      hour: "2-digit",
-      minute: "2-digit",
-    }));
-    
-    setIsVerifying(false);
-    setStep(4);
-    
-    toast({
-      title: "Key Generated!",
-      description: "Key kamu berhasil dibuat dan siap digunakan.",
-    });
   };
 
   const handleCopyKey = async () => {
@@ -88,6 +142,61 @@ const GetKey = () => {
       });
     }
   };
+
+  if (error) {
+    return (
+      <div className="min-h-screen bg-background cyber-grid">
+        <Navbar />
+        <main className="pt-24 pb-16 px-4">
+          <div className="container mx-auto max-w-2xl">
+            <div className="p-6 rounded-lg border border-destructive/30 bg-destructive/5 text-center">
+              <AlertCircle className="h-12 w-12 text-destructive mx-auto mb-4" />
+              <h2 className="font-display text-xl font-semibold mb-2">{error}</h2>
+              <p className="text-muted-foreground">
+                Pastikan link yang kamu gunakan benar.
+              </p>
+            </div>
+          </div>
+        </main>
+      </div>
+    );
+  }
+
+  if (!scriptId) {
+    return (
+      <div className="min-h-screen bg-background cyber-grid">
+        <Navbar />
+        <main className="pt-24 pb-16 px-4">
+          <div className="container mx-auto max-w-2xl">
+            <div className="text-center mb-12">
+              <div className="inline-flex items-center gap-2 px-4 py-2 rounded-full border border-primary/30 bg-primary/10 mb-6">
+                <Key className="h-4 w-4 text-primary" />
+                <span className="text-xs uppercase tracking-wider text-primary">
+                  Key Generation
+                </span>
+              </div>
+              <h1 className="font-display text-3xl md:text-4xl font-bold mb-4">
+                <span className="text-foreground">Get Your </span>
+                <span className="text-gradient-cyber">Access Key</span>
+              </h1>
+              <p className="text-muted-foreground mb-8">
+                Jalankan script di Roblox dan link akan otomatis tersalin ke clipboard.
+              </p>
+              
+              <div className="p-6 rounded-lg border border-border bg-card/50">
+                <AlertCircle className="h-10 w-10 text-muted-foreground mx-auto mb-4" />
+                <h3 className="font-display text-lg font-semibold mb-2">Script ID Diperlukan</h3>
+                <p className="text-sm text-muted-foreground">
+                  Halaman ini memerlukan Script ID. Jalankan script di Roblox dan link 
+                  yang benar akan tersalin ke clipboard kamu.
+                </p>
+              </div>
+            </div>
+          </div>
+        </main>
+      </div>
+    );
+  }
 
   return (
     <div className="min-h-screen bg-background cyber-grid">
@@ -109,12 +218,19 @@ const GetKey = () => {
             <p className="text-muted-foreground">
               Ikuti langkah-langkah berikut untuk mendapatkan key akses script.
             </p>
-            {scriptId && (
-              <div className="mt-4 inline-flex items-center gap-2 px-3 py-1.5 rounded-md bg-secondary/50 border border-border">
-                <span className="text-xs text-muted-foreground">Script ID:</span>
+            
+            <div className="mt-4 space-y-2">
+              {scriptName && (
+                <div className="inline-flex items-center gap-2 px-3 py-1.5 rounded-md bg-accent/10 border border-accent/30">
+                  <span className="text-xs text-muted-foreground">Script:</span>
+                  <span className="text-xs font-semibold text-accent">{scriptName}</span>
+                </div>
+              )}
+              <div className="inline-flex items-center gap-2 px-3 py-1.5 rounded-md bg-secondary/50 border border-border ml-2">
+                <span className="text-xs text-muted-foreground">ID:</span>
                 <span className="text-xs font-mono text-primary">{scriptId}</span>
               </div>
-            )}
+            </div>
           </div>
 
           {/* Progress Steps */}
@@ -141,10 +257,10 @@ const GetKey = () => {
               <div className="space-y-6">
                 <div className="flex items-center gap-3 pb-4 border-b border-border">
                   <Shield className="h-5 w-5 text-primary" />
-                  <span className="font-display text-lg font-semibold">Step 1: Verify HWID</span>
+                  <span className="font-display text-lg font-semibold">Step 1: Generate HWID</span>
                 </div>
                 
-                <HWIDDisplay />
+                <HWIDDisplay onHWIDGenerated={handleHWIDGenerated} />
                 
                 <p className="text-sm text-muted-foreground text-center">
                   HWID kamu akan digunakan untuk mengidentifikasi perangkat. 
@@ -156,6 +272,7 @@ const GetKey = () => {
                   size="lg"
                   className="w-full"
                   onClick={handleStartVerification}
+                  disabled={!hwid}
                 >
                   Continue to Verification
                 </Button>
@@ -165,8 +282,8 @@ const GetKey = () => {
             {step === 2 && (
               <div className="space-y-6">
                 <div className="flex items-center gap-3 pb-4 border-b border-border">
-                  <ExternalLink className="h-5 w-5 text-primary" />
-                  <span className="font-display text-lg font-semibold">Step 2: Complete Verification</span>
+                  <Loader2 className="h-5 w-5 text-primary animate-spin" />
+                  <span className="font-display text-lg font-semibold">Step 2: Verification</span>
                 </div>
                 
                 <div className="text-center py-8">
@@ -174,12 +291,12 @@ const GetKey = () => {
                     <span className="font-display text-3xl font-bold text-primary">{countdown}</span>
                   </div>
                   <p className="text-muted-foreground mb-4">
-                    Mohon tunggu sebentar...
+                    Memverifikasi perangkat kamu...
                   </p>
                   <div className="w-full h-2 bg-secondary rounded-full overflow-hidden">
                     <div 
                       className="h-full bg-gradient-to-r from-primary to-neon-purple transition-all duration-1000"
-                      style={{ width: `${((15 - countdown) / 15) * 100}%` }}
+                      style={{ width: `${((10 - countdown) / 10) * 100}%` }}
                     />
                   </div>
                 </div>
@@ -263,9 +380,14 @@ const GetKey = () => {
                   <h4 className="font-display text-sm font-semibold mb-2">Cara Menggunakan:</h4>
                   <ol className="text-xs text-muted-foreground space-y-1 list-decimal list-inside">
                     <li>Copy key di atas</li>
-                    <li>Jalankan script di Roblox executor</li>
-                    <li>Masukkan key saat diminta</li>
-                    <li>Nikmati script tanpa batasan!</li>
+                    <li>Buka Roblox executor kamu</li>
+                    <li>Sebelum menjalankan script, jalankan kode ini:</li>
+                  </ol>
+                  <div className="mt-2 p-2 rounded bg-background font-mono text-xs text-primary">
+                    getgenv().RobloxGuardKey = "{generatedKey}"
+                  </div>
+                  <ol className="text-xs text-muted-foreground space-y-1 list-decimal list-inside mt-2" start={4}>
+                    <li>Lalu jalankan loader script</li>
                   </ol>
                 </div>
                 
