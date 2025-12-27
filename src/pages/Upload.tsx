@@ -120,6 +120,14 @@ loadstring(b64d(d(_)))()`;
 
 local HttpService = game:GetService("HttpService")
 local Players = game:GetService("Players")
+local TweenService = game:GetService("TweenService")
+local UserInputService = game:GetService("UserInputService")
+local CoreGui = game:GetService("CoreGui")
+
+local scriptId = "${data.id}"
+local keyUrl = "${keyUrl}"
+local verifyUrl = "${verifyUrl}"
+local loadUrl = "${loadUrl}"
 
 local function getHWID()
     local success, hwid = pcall(function()
@@ -129,40 +137,31 @@ local function getHWID()
     return tostring(Players.LocalPlayer.UserId)
 end
 
-local scriptId = "${data.id}"
-local keyUrl = "${keyUrl}"
-local verifyUrl = "${verifyUrl}"
-local loadUrl = "${loadUrl}"
-
 -- Check for saved key
 local savedKey = nil
 if getgenv then
     savedKey = getgenv()["RG_KEY_" .. scriptId]
 end
 
-local function promptKey()
-    if setclipboard then
-        setclipboard(keyUrl)
-    end
-    game:GetService("StarterGui"):SetCore("SendNotification", {
-        Title = "RobloxGuard",
-        Text = "Get your key! Link copied to clipboard.",
-        Duration = 10
-    })
-    error("[RobloxGuard] Get your key at: " .. keyUrl)
-end
-
-local function verifyAndLoad(key)
+local function verifyAndLoad(key, statusLabel, onSuccess, onFail)
     local hwid = getHWID()
     
-    -- Verify key
+    if statusLabel then
+        statusLabel.Text = "Verifying key..."
+        statusLabel.TextColor3 = Color3.fromRGB(255, 200, 100)
+    end
+    
     local success, response = pcall(function()
         return HttpService:GetAsync(verifyUrl .. "?script=" .. scriptId .. "&hwid=" .. hwid .. "&key=" .. key)
     end)
     
     if not success then
-        promptKey()
-        return
+        if statusLabel then
+            statusLabel.Text = "Connection error. Try again."
+            statusLabel.TextColor3 = Color3.fromRGB(255, 100, 100)
+        end
+        if onFail then onFail() end
+        return false
     end
     
     local data = HttpService:JSONDecode(response)
@@ -170,48 +169,290 @@ local function verifyAndLoad(key)
         if getgenv then
             getgenv()["RG_KEY_" .. scriptId] = nil
         end
-        promptKey()
-        return
+        if statusLabel then
+            statusLabel.Text = data.message or "Invalid key!"
+            statusLabel.TextColor3 = Color3.fromRGB(255, 100, 100)
+        end
+        if onFail then onFail() end
+        return false
     end
     
-    -- Save valid key
     if getgenv then
         getgenv()["RG_KEY_" .. scriptId] = key
     end
     
-    -- Load script
+    if statusLabel then
+        statusLabel.Text = "Key valid! Loading script..."
+        statusLabel.TextColor3 = Color3.fromRGB(100, 255, 100)
+    end
+    
     local scriptSuccess, scriptContent = pcall(function()
         return HttpService:GetAsync(loadUrl .. "?hwid=" .. hwid .. "&key=" .. key)
     end)
     
     if scriptSuccess and scriptContent then
         if string.sub(scriptContent, 1, 8) == "-- Error" then
-            error(scriptContent)
+            if statusLabel then
+                statusLabel.Text = scriptContent
+                statusLabel.TextColor3 = Color3.fromRGB(255, 100, 100)
+            end
+            if onFail then onFail() end
+            return false
         else
+            if onSuccess then onSuccess() end
             loadstring(scriptContent)()
+            return true
         end
     else
-        error("[RobloxGuard] Failed to load script")
+        if statusLabel then
+            statusLabel.Text = "Failed to load script"
+            statusLabel.TextColor3 = Color3.fromRGB(255, 100, 100)
+        end
+        if onFail then onFail() end
+        return false
     end
 end
 
--- Try saved key first
+local function createKeyUI()
+    if CoreGui:FindFirstChild("RobloxGuardUI") then
+        CoreGui:FindFirstChild("RobloxGuardUI"):Destroy()
+    end
+    
+    local ScreenGui = Instance.new("ScreenGui")
+    ScreenGui.Name = "RobloxGuardUI"
+    ScreenGui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
+    ScreenGui.ResetOnSpawn = false
+    
+    pcall(function()
+        ScreenGui.Parent = CoreGui
+    end)
+    if not ScreenGui.Parent then
+        ScreenGui.Parent = Players.LocalPlayer:WaitForChild("PlayerGui")
+    end
+    
+    local MainFrame = Instance.new("Frame")
+    MainFrame.Name = "MainFrame"
+    MainFrame.Size = UDim2.new(0, 320, 0, 220)
+    MainFrame.Position = UDim2.new(0.5, -160, 0.5, -110)
+    MainFrame.BackgroundColor3 = Color3.fromRGB(25, 25, 35)
+    MainFrame.BorderSizePixel = 0
+    MainFrame.Parent = ScreenGui
+    
+    local UICorner = Instance.new("UICorner")
+    UICorner.CornerRadius = UDim.new(0, 12)
+    UICorner.Parent = MainFrame
+    
+    local UIStroke = Instance.new("UIStroke")
+    UIStroke.Color = Color3.fromRGB(100, 100, 255)
+    UIStroke.Thickness = 2
+    UIStroke.Parent = MainFrame
+    
+    local dragging, dragInput, dragStart, startPos
+    MainFrame.InputBegan:Connect(function(input)
+        if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+            dragging = true
+            dragStart = input.Position
+            startPos = MainFrame.Position
+            input.Changed:Connect(function()
+                if input.UserInputState == Enum.UserInputState.End then
+                    dragging = false
+                end
+            end)
+        end
+    end)
+    MainFrame.InputChanged:Connect(function(input)
+        if input.UserInputType == Enum.UserInputType.MouseMovement or input.UserInputType == Enum.UserInputType.Touch then
+            dragInput = input
+        end
+    end)
+    UserInputService.InputChanged:Connect(function(input)
+        if input == dragInput and dragging then
+            local delta = input.Position - dragStart
+            MainFrame.Position = UDim2.new(startPos.X.Scale, startPos.X.Offset + delta.X, startPos.Y.Scale, startPos.Y.Offset + delta.Y)
+        end
+    end)
+    
+    local TitleBar = Instance.new("Frame")
+    TitleBar.Name = "TitleBar"
+    TitleBar.Size = UDim2.new(1, 0, 0, 40)
+    TitleBar.BackgroundColor3 = Color3.fromRGB(35, 35, 50)
+    TitleBar.BorderSizePixel = 0
+    TitleBar.Parent = MainFrame
+    
+    local TitleCorner = Instance.new("UICorner")
+    TitleCorner.CornerRadius = UDim.new(0, 12)
+    TitleCorner.Parent = TitleBar
+    
+    local TitleFix = Instance.new("Frame")
+    TitleFix.Size = UDim2.new(1, 0, 0, 12)
+    TitleFix.Position = UDim2.new(0, 0, 1, -12)
+    TitleFix.BackgroundColor3 = Color3.fromRGB(35, 35, 50)
+    TitleFix.BorderSizePixel = 0
+    TitleFix.Parent = TitleBar
+    
+    local Title = Instance.new("TextLabel")
+    Title.Name = "Title"
+    Title.Size = UDim2.new(1, -50, 1, 0)
+    Title.Position = UDim2.new(0, 15, 0, 0)
+    Title.BackgroundTransparency = 1
+    Title.Text = "RobloxGuard Key System"
+    Title.TextColor3 = Color3.fromRGB(255, 255, 255)
+    Title.TextSize = 16
+    Title.Font = Enum.Font.GothamBold
+    Title.TextXAlignment = Enum.TextXAlignment.Left
+    Title.Parent = TitleBar
+    
+    local CloseBtn = Instance.new("TextButton")
+    CloseBtn.Name = "CloseBtn"
+    CloseBtn.Size = UDim2.new(0, 30, 0, 30)
+    CloseBtn.Position = UDim2.new(1, -35, 0, 5)
+    CloseBtn.BackgroundColor3 = Color3.fromRGB(255, 80, 80)
+    CloseBtn.Text = "X"
+    CloseBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+    CloseBtn.TextSize = 14
+    CloseBtn.Font = Enum.Font.GothamBold
+    CloseBtn.Parent = TitleBar
+    
+    local CloseBtnCorner = Instance.new("UICorner")
+    CloseBtnCorner.CornerRadius = UDim.new(0, 6)
+    CloseBtnCorner.Parent = CloseBtn
+    
+    CloseBtn.MouseButton1Click:Connect(function()
+        ScreenGui:Destroy()
+    end)
+    
+    local Content = Instance.new("Frame")
+    Content.Name = "Content"
+    Content.Size = UDim2.new(1, -30, 1, -55)
+    Content.Position = UDim2.new(0, 15, 0, 50)
+    Content.BackgroundTransparency = 1
+    Content.Parent = MainFrame
+    
+    local KeyInput = Instance.new("TextBox")
+    KeyInput.Name = "KeyInput"
+    KeyInput.Size = UDim2.new(1, 0, 0, 40)
+    KeyInput.Position = UDim2.new(0, 0, 0, 10)
+    KeyInput.BackgroundColor3 = Color3.fromRGB(45, 45, 60)
+    KeyInput.BorderSizePixel = 0
+    KeyInput.Text = ""
+    KeyInput.PlaceholderText = "Enter your key here..."
+    KeyInput.PlaceholderColor3 = Color3.fromRGB(150, 150, 150)
+    KeyInput.TextColor3 = Color3.fromRGB(255, 255, 255)
+    KeyInput.TextSize = 14
+    KeyInput.Font = Enum.Font.GothamMedium
+    KeyInput.ClearTextOnFocus = false
+    KeyInput.Parent = Content
+    
+    local KeyInputCorner = Instance.new("UICorner")
+    KeyInputCorner.CornerRadius = UDim.new(0, 8)
+    KeyInputCorner.Parent = KeyInput
+    
+    local StatusLabel = Instance.new("TextLabel")
+    StatusLabel.Name = "StatusLabel"
+    StatusLabel.Size = UDim2.new(1, 0, 0, 20)
+    StatusLabel.Position = UDim2.new(0, 0, 0, 55)
+    StatusLabel.BackgroundTransparency = 1
+    StatusLabel.Text = "Enter your key to continue"
+    StatusLabel.TextColor3 = Color3.fromRGB(180, 180, 180)
+    StatusLabel.TextSize = 12
+    StatusLabel.Font = Enum.Font.Gotham
+    StatusLabel.Parent = Content
+    
+    local VerifyBtn = Instance.new("TextButton")
+    VerifyBtn.Name = "VerifyBtn"
+    VerifyBtn.Size = UDim2.new(0.48, 0, 0, 38)
+    VerifyBtn.Position = UDim2.new(0, 0, 0, 85)
+    VerifyBtn.BackgroundColor3 = Color3.fromRGB(80, 80, 255)
+    VerifyBtn.Text = "Verify Key"
+    VerifyBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+    VerifyBtn.TextSize = 14
+    VerifyBtn.Font = Enum.Font.GothamBold
+    VerifyBtn.Parent = Content
+    
+    local VerifyBtnCorner = Instance.new("UICorner")
+    VerifyBtnCorner.CornerRadius = UDim.new(0, 8)
+    VerifyBtnCorner.Parent = VerifyBtn
+    
+    local GetKeyBtn = Instance.new("TextButton")
+    GetKeyBtn.Name = "GetKeyBtn"
+    GetKeyBtn.Size = UDim2.new(0.48, 0, 0, 38)
+    GetKeyBtn.Position = UDim2.new(0.52, 0, 0, 85)
+    GetKeyBtn.BackgroundColor3 = Color3.fromRGB(60, 60, 80)
+    GetKeyBtn.Text = "Get Key"
+    GetKeyBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+    GetKeyBtn.TextSize = 14
+    GetKeyBtn.Font = Enum.Font.GothamBold
+    GetKeyBtn.Parent = Content
+    
+    local GetKeyBtnCorner = Instance.new("UICorner")
+    GetKeyBtnCorner.CornerRadius = UDim.new(0, 8)
+    GetKeyBtnCorner.Parent = GetKeyBtn
+    
+    local function createHoverEffect(button, normalColor, hoverColor)
+        button.MouseEnter:Connect(function()
+            TweenService:Create(button, TweenInfo.new(0.2), {BackgroundColor3 = hoverColor}):Play()
+        end)
+        button.MouseLeave:Connect(function()
+            TweenService:Create(button, TweenInfo.new(0.2), {BackgroundColor3 = normalColor}):Play()
+        end)
+    end
+    
+    createHoverEffect(VerifyBtn, Color3.fromRGB(80, 80, 255), Color3.fromRGB(100, 100, 255))
+    createHoverEffect(GetKeyBtn, Color3.fromRGB(60, 60, 80), Color3.fromRGB(80, 80, 100))
+    createHoverEffect(CloseBtn, Color3.fromRGB(255, 80, 80), Color3.fromRGB(255, 100, 100))
+    
+    local isVerifying = false
+    
+    VerifyBtn.MouseButton1Click:Connect(function()
+        if isVerifying then return end
+        local key = KeyInput.Text:gsub("%s+", "")
+        
+        if key == "" then
+            StatusLabel.Text = "Please enter a key!"
+            StatusLabel.TextColor3 = Color3.fromRGB(255, 100, 100)
+            return
+        end
+        
+        isVerifying = true
+        VerifyBtn.Text = "Verifying..."
+        
+        verifyAndLoad(key, StatusLabel, function()
+            task.wait(0.5)
+            ScreenGui:Destroy()
+        end, function()
+            isVerifying = false
+            VerifyBtn.Text = "Verify Key"
+        end)
+    end)
+    
+    GetKeyBtn.MouseButton1Click:Connect(function()
+        if setclipboard then
+            setclipboard(keyUrl)
+            StatusLabel.Text = "Link copied! Open in browser."
+            StatusLabel.TextColor3 = Color3.fromRGB(100, 255, 100)
+        else
+            StatusLabel.Text = "Copy: " .. keyUrl
+            StatusLabel.TextColor3 = Color3.fromRGB(255, 200, 100)
+        end
+    end)
+    
+    MainFrame.Size = UDim2.new(0, 0, 0, 0)
+    MainFrame.Position = UDim2.new(0.5, 0, 0.5, 0)
+    TweenService:Create(MainFrame, TweenInfo.new(0.3, Enum.EasingStyle.Back), {
+        Size = UDim2.new(0, 320, 0, 220),
+        Position = UDim2.new(0.5, -160, 0.5, -110)
+    }):Play()
+    
+    return ScreenGui
+end
+
 if savedKey then
-    verifyAndLoad(savedKey)
+    local success = verifyAndLoad(savedKey, nil, nil, nil)
+    if not success then
+        createKeyUI()
+    end
 else
-    -- Prompt for key input
-    local inputKey = nil
-    
-    -- Try to get key from user
-    if getgenv and getgenv().RobloxGuardKey then
-        inputKey = getgenv().RobloxGuardKey
-    end
-    
-    if inputKey then
-        verifyAndLoad(inputKey)
-    else
-        promptKey()
-    end
+    createKeyUI()
 end` : `-- RobloxGuard Protected Script
 -- Script: ${scriptName}
 -- ID: ${data.id}
@@ -394,7 +635,7 @@ end`;
                     <CodeBlock code={loaderScript} language="lua" />
                     <p className="text-xs text-muted-foreground">
                       {keySystemEnabled 
-                        ? "Script ini akan meminta key saat dijalankan. User harus mengunjungi halaman Get Key untuk mendapatkan akses."
+                        ? "Script ini akan menampilkan UI floating untuk input key saat dijalankan. User bisa memasukkan key langsung di UI tersebut."
                         : "Script ini bisa langsung dijalankan tanpa key."}
                     </p>
                   </div>
@@ -420,7 +661,8 @@ end`;
                   <li>• Loader script akan memuat script dari server</li>
                   {keySystemEnabled && (
                     <>
-                      <li>• User harus mendapatkan key berdasarkan HWID mereka</li>
+                      <li>• UI floating akan muncul untuk input key</li>
+                      <li>• Setelah key valid, script otomatis dijalankan</li>
                       <li>• Key akan expired sesuai durasi yang kamu tentukan</li>
                     </>
                   )}
