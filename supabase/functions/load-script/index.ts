@@ -1,6 +1,44 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 
+// Rate limiting map
+const rateLimit = new Map<string, { count: number; resetAt: number }>();
+
+function checkRateLimit(identifier: string, maxRequests: number, windowMs: number): boolean {
+  const now = Date.now();
+  const record = rateLimit.get(identifier);
+
+  if (!record || now > record.resetAt) {
+    rateLimit.set(identifier, { count: 1, resetAt: now + windowMs });
+    return true;
+  }
+
+  if (record.count >= maxRequests) {
+    return false;
+  }
+
+  record.count++;
+  return true;
+}
+
+// Input validation
+const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+const HWID_REGEX = /^[A-Z0-9]{4}-[A-Z0-9]{4}-[A-Z0-9]{4}-[A-Z0-9]{4}$/;
+const KEY_REGEX = /^[A-Z0-9]{5}-[A-Z0-9]{5}-[A-Z0-9]{5}-[A-Z0-9]{5}$/;
+
+function validateScriptId(scriptId: string | null | undefined): boolean {
+  return typeof scriptId === 'string' && UUID_REGEX.test(scriptId);
+}
+
+function validateHwid(hwid: string | null | undefined): boolean {
+  return typeof hwid === 'string' && hwid.length >= 10 && hwid.length <= 128 && HWID_REGEX.test(hwid);
+}
+
+function validateKey(key: string | null | undefined): boolean {
+  return typeof key === 'string' && KEY_REGEX.test(key);
+}
+
+// Allow all origins for Roblox executor access
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
   'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
@@ -19,14 +57,25 @@ serve(async (req) => {
     const hwid = url.searchParams.get('hwid');
     const key = url.searchParams.get('key');
 
-    console.log(`Load script request - Script: ${scriptId}, HWID: ${hwid}`);
-
-    if (!scriptId) {
+    // Validate script ID
+    if (!validateScriptId(scriptId)) {
       return new Response(
-        '-- Error: Script ID required',
-        { headers: { ...corsHeaders, 'Content-Type': 'text/plain' } }
+        '-- Error: Invalid script ID format',
+        { headers: { ...corsHeaders, 'Content-Type': 'text/plain' }, status: 400 }
       );
     }
+
+    // Rate limiting: 20 requests per minute per IP
+    const clientIp = req.headers.get('x-forwarded-for')?.split(',')[0]?.trim() || 'unknown';
+    
+    if (!checkRateLimit(clientIp, 20, 60000)) {
+      return new Response(
+        '-- Error: Rate limit exceeded',
+        { headers: { ...corsHeaders, 'Content-Type': 'text/plain' }, status: 429 }
+      );
+    }
+
+    console.log(`Load script request - Script: ${scriptId}, HWID: ${hwid ? '[provided]' : '[none]'}`);
 
     const supabaseUrl = Deno.env.get('SUPABASE_URL')!;
     const supabaseKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
@@ -43,7 +92,7 @@ serve(async (req) => {
       console.error('Script lookup error:', scriptError);
       return new Response(
         '-- Error: Script not found',
-        { headers: { ...corsHeaders, 'Content-Type': 'text/plain' } }
+        { headers: { ...corsHeaders, 'Content-Type': 'text/plain' }, status: 404 }
       );
     }
 
@@ -56,11 +105,18 @@ serve(async (req) => {
       );
     }
 
-    // Verify key
-    if (!hwid || !key) {
+    // Validate HWID and key format when key system is enabled
+    if (!validateHwid(hwid)) {
       return new Response(
-        '-- Error: HWID and Key required for this script',
-        { headers: { ...corsHeaders, 'Content-Type': 'text/plain' } }
+        '-- Error: Invalid HWID format',
+        { headers: { ...corsHeaders, 'Content-Type': 'text/plain' }, status: 400 }
+      );
+    }
+
+    if (!validateKey(key)) {
+      return new Response(
+        '-- Error: Invalid key format',
+        { headers: { ...corsHeaders, 'Content-Type': 'text/plain' }, status: 400 }
       );
     }
 
@@ -78,7 +134,7 @@ serve(async (req) => {
       console.error('Key validation failed');
       return new Response(
         '-- Error: Invalid key or HWID mismatch',
-        { headers: { ...corsHeaders, 'Content-Type': 'text/plain' } }
+        { headers: { ...corsHeaders, 'Content-Type': 'text/plain' }, status: 401 }
       );
     }
 
@@ -94,7 +150,7 @@ serve(async (req) => {
 
       return new Response(
         '-- Error: Key expired',
-        { headers: { ...corsHeaders, 'Content-Type': 'text/plain' } }
+        { headers: { ...corsHeaders, 'Content-Type': 'text/plain' }, status: 401 }
       );
     }
 

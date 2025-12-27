@@ -1,10 +1,54 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 
-const corsHeaders = {
-  'Access-Control-Allow-Origin': '*',
-  'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
-};
+// Rate limiting map (in-memory, resets on function cold start)
+const rateLimit = new Map<string, { count: number; resetAt: number }>();
+
+function checkRateLimit(identifier: string, maxRequests: number, windowMs: number): boolean {
+  const now = Date.now();
+  const record = rateLimit.get(identifier);
+
+  if (!record || now > record.resetAt) {
+    rateLimit.set(identifier, { count: 1, resetAt: now + windowMs });
+    return true;
+  }
+
+  if (record.count >= maxRequests) {
+    return false;
+  }
+
+  record.count++;
+  return true;
+}
+
+// Input validation
+const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+const HWID_REGEX = /^[A-Z0-9]{4}-[A-Z0-9]{4}-[A-Z0-9]{4}-[A-Z0-9]{4}$/;
+
+function validateScriptId(scriptId: string | null | undefined): boolean {
+  return typeof scriptId === 'string' && UUID_REGEX.test(scriptId);
+}
+
+function validateHwid(hwid: string | null | undefined): boolean {
+  return typeof hwid === 'string' && hwid.length >= 10 && hwid.length <= 128 && HWID_REGEX.test(hwid);
+}
+
+function getCorsHeaders(origin: string | null): Record<string, string> {
+  const allowedOrigins = [
+    'https://preview--robloxx-guard.lovable.app',
+    'https://robloxx-guard.lovable.app',
+    'http://localhost:5173',
+    'http://localhost:8080'
+  ];
+  
+  const allowedOrigin = origin && allowedOrigins.includes(origin) ? origin : allowedOrigins[0];
+  
+  return {
+    'Access-Control-Allow-Origin': allowedOrigin,
+    'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
+    'Access-Control-Allow-Credentials': 'true'
+  };
+}
 
 function generateAccessKey(): string {
   const chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
@@ -20,22 +64,66 @@ function generateAccessKey(): string {
 }
 
 serve(async (req) => {
+  const origin = req.headers.get('origin');
+  const corsHeaders = getCorsHeaders(origin);
+
   // Handle CORS preflight requests
   if (req.method === 'OPTIONS') {
     return new Response(null, { headers: corsHeaders });
   }
 
   try {
-    const { scriptId, hwid } = await req.json();
-
-    console.log(`Generate key request - Script: ${scriptId}, HWID: ${hwid}`);
-
-    if (!scriptId || !hwid) {
+    // Parse and validate request body
+    let body: unknown;
+    try {
+      body = await req.json();
+    } catch {
+      console.error('Invalid JSON body');
       return new Response(
-        JSON.stringify({ success: false, message: 'Missing script ID or HWID' }),
+        JSON.stringify({ success: false, message: 'Invalid request body' }),
         { headers: { ...corsHeaders, 'Content-Type': 'application/json' }, status: 400 }
       );
     }
+
+    if (typeof body !== 'object' || body === null) {
+      return new Response(
+        JSON.stringify({ success: false, message: 'Invalid request body' }),
+        { headers: { ...corsHeaders, 'Content-Type': 'application/json' }, status: 400 }
+      );
+    }
+
+    const { scriptId, hwid } = body as { scriptId?: string; hwid?: string };
+
+    // Validate inputs
+    if (!validateScriptId(scriptId)) {
+      console.error('Invalid script ID format:', scriptId);
+      return new Response(
+        JSON.stringify({ success: false, message: 'Invalid script ID format' }),
+        { headers: { ...corsHeaders, 'Content-Type': 'application/json' }, status: 400 }
+      );
+    }
+
+    if (!validateHwid(hwid)) {
+      console.error('Invalid HWID format:', hwid);
+      return new Response(
+        JSON.stringify({ success: false, message: 'Invalid HWID format' }),
+        { headers: { ...corsHeaders, 'Content-Type': 'application/json' }, status: 400 }
+      );
+    }
+
+    // Rate limiting: 5 requests per minute per IP+HWID combination
+    const clientIp = req.headers.get('x-forwarded-for')?.split(',')[0]?.trim() || 'unknown';
+    const rateLimitKey = `${clientIp}:${hwid}`;
+    
+    if (!checkRateLimit(rateLimitKey, 5, 60000)) {
+      console.error('Rate limit exceeded for:', rateLimitKey);
+      return new Response(
+        JSON.stringify({ success: false, message: 'Rate limit exceeded. Please try again later.' }),
+        { headers: { ...corsHeaders, 'Content-Type': 'application/json' }, status: 429 }
+      );
+    }
+
+    console.log(`Generate key request - Script: ${scriptId}, HWID: ${hwid}`);
 
     const supabaseUrl = Deno.env.get('SUPABASE_URL')!;
     const supabaseKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
@@ -57,7 +145,7 @@ serve(async (req) => {
     }
 
     // Check if HWID already has an active key
-    const { data: existingKey, error: existingError } = await supabase
+    const { data: existingKey } = await supabase
       .from('hwid_keys')
       .select('*')
       .eq('script_id', scriptId)
@@ -134,7 +222,7 @@ serve(async (req) => {
     console.error('Error:', error);
     return new Response(
       JSON.stringify({ success: false, message: 'Server error' }),
-      { headers: { ...corsHeaders, 'Content-Type': 'application/json' }, status: 500 }
+      { headers: { ...getCorsHeaders(null), 'Content-Type': 'application/json' }, status: 500 }
     );
   }
 });
