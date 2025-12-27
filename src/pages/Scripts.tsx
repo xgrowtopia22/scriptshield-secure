@@ -33,10 +33,10 @@ const Scripts = () => {
       .order('created_at', { ascending: false });
 
     if (error) {
-      console.error('Error fetching scripts:', error);
+      console.error('Script fetch error:', error);
       toast({
         title: "Error",
-        description: "Gagal memuat daftar script.",
+        description: "Unable to load scripts. Please try again.",
         variant: "destructive",
       });
     } else {
@@ -65,7 +65,7 @@ const Scripts = () => {
     if (error) {
       toast({
         title: "Error",
-        description: "Gagal mengubah status key system.",
+        description: "Unable to update key system status.",
         variant: "destructive",
       });
     } else {
@@ -92,7 +92,7 @@ const Scripts = () => {
     if (error) {
       toast({
         title: "Error",
-        description: "Gagal menghapus script.",
+        description: "Unable to delete script.",
         variant: "destructive",
       });
     } else {
