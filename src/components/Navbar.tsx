@@ -1,16 +1,69 @@
-import { Link, useLocation } from "react-router-dom";
-import { Shield, Key, Upload, Home, Lock } from "lucide-react";
+import { useState, useEffect } from "react";
+import { Link, useLocation, useNavigate } from "react-router-dom";
+import { Shield, Key, Upload, Home, LogIn, LogOut, User, FileCode, Loader2 } from "lucide-react";
 import { Button } from "./ui/button";
 import { cn } from "@/lib/utils";
+import { supabase } from "@/integrations/supabase/client";
+import { Session } from "@supabase/supabase-js";
+import { toast } from "@/hooks/use-toast";
 
 const Navbar = () => {
   const location = useLocation();
+  const navigate = useNavigate();
+  const [session, setSession] = useState<Session | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [loggingOut, setLoggingOut] = useState(false);
 
-  const navItems = [
+  useEffect(() => {
+    // Set up auth listener first
+    const { data: { subscription } } = supabase.auth.onAuthStateChange(
+      (event, session) => {
+        setSession(session);
+      }
+    );
+
+    // Then check for existing session
+    supabase.auth.getSession().then(({ data: { session } }) => {
+      setSession(session);
+      setLoading(false);
+    });
+
+    return () => subscription.unsubscribe();
+  }, []);
+
+  const handleLogout = async () => {
+    setLoggingOut(true);
+    const { error } = await supabase.auth.signOut();
+    setLoggingOut(false);
+
+    if (error) {
+      toast({
+        title: "Error",
+        description: "Unable to sign out. Please try again.",
+        variant: "destructive",
+      });
+    } else {
+      toast({
+        title: "Signed out",
+        description: "You have been successfully signed out.",
+      });
+      navigate("/");
+    }
+  };
+
+  const publicNavItems = [
     { path: "/", label: "Home", icon: Home },
-    { path: "/upload", label: "Upload Script", icon: Upload },
     { path: "/getkey", label: "Get Key", icon: Key },
   ];
+
+  const authNavItems = [
+    { path: "/", label: "Home", icon: Home },
+    { path: "/upload", label: "Upload Script", icon: Upload },
+    { path: "/scripts", label: "My Scripts", icon: FileCode },
+    { path: "/getkey", label: "Get Key", icon: Key },
+  ];
+
+  const navItems = session ? authNavItems : publicNavItems;
 
   return (
     <nav className="fixed top-0 left-0 right-0 z-50 border-b border-border/50 bg-background/80 backdrop-blur-xl">
@@ -49,10 +102,37 @@ const Navbar = () => {
           </div>
 
           <div className="flex items-center gap-2">
-            <Lock className="h-4 w-4 text-muted-foreground" />
-            <span className="text-xs text-muted-foreground uppercase tracking-wider">
-              Secure System
-            </span>
+            {loading ? (
+              <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />
+            ) : session ? (
+              <>
+                <div className="hidden sm:flex items-center gap-2 text-sm text-muted-foreground">
+                  <User className="h-4 w-4" />
+                  <span className="max-w-[150px] truncate">{session.user.email}</span>
+                </div>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={handleLogout}
+                  disabled={loggingOut}
+                  className="gap-2"
+                >
+                  {loggingOut ? (
+                    <Loader2 className="h-4 w-4 animate-spin" />
+                  ) : (
+                    <LogOut className="h-4 w-4" />
+                  )}
+                  <span className="hidden sm:inline">Sign Out</span>
+                </Button>
+              </>
+            ) : (
+              <Link to="/auth">
+                <Button variant="cyber" size="sm" className="gap-2">
+                  <LogIn className="h-4 w-4" />
+                  <span className="hidden sm:inline">Sign In</span>
+                </Button>
+              </Link>
+            )}
           </div>
         </div>
       </div>

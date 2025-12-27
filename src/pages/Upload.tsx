@@ -65,6 +65,19 @@ loadstring(b64d(d(_)))()`;
     setIsProcessing(true);
     
     try {
+      // Get current user
+      const { data: { user }, error: userError } = await supabase.auth.getUser();
+      
+      if (userError || !user) {
+        toast({
+          title: "Error",
+          description: "You must be logged in to upload scripts.",
+          variant: "destructive",
+        });
+        setIsProcessing(false);
+        return;
+      }
+
       // Obfuscate the script
       const obfuscated = obfuscateScript(scriptCode);
       
@@ -77,10 +90,11 @@ loadstring(b64d(d(_)))()`;
       // Generate loader script placeholder (will be updated with real ID)
       const tempLoader = "-- Loading...";
 
-      // Save to database
+      // Save to database with user_id
       const { data, error } = await supabase
         .from('scripts')
         .insert({
+          user_id: user.id,
           name: scriptName,
           original_script: scriptCode,
           obfuscated_script: obfuscated,
@@ -233,11 +247,11 @@ end`;
         title: "Berhasil!",
         description: "Script berhasil di-obfuscate dan disimpan ke database.",
       });
-    } catch (error: any) {
-      console.error('Error:', error);
+    } catch (error: unknown) {
+      console.error('Upload error:', error);
       toast({
         title: "Error",
-        description: error.message || "Gagal menyimpan script.",
+        description: "Unable to save script. Please try again.",
         variant: "destructive",
       });
     } finally {
