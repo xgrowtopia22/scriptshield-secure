@@ -59,35 +59,42 @@ const Upload = () => {
     setPermanentKey(segments.join("-"));
   };
 
-  // Simple obfuscation function
+  // Simple obfuscation function - compatible with Roblox Lua
   const obfuscateScript = (code: string): string => {
-    const encoded = btoa(unescape(encodeURIComponent(code)));
-    const scrambled = encoded.split('').reverse().join('');
+    // Convert to hex encoding (more reliable in Roblox)
+    const toHex = (str: string): string => {
+      let hex = '';
+      for (let i = 0; i < str.length; i++) {
+        hex += str.charCodeAt(i).toString(16).padStart(2, '0');
+      }
+      return hex;
+    };
+    
+    const hexEncoded = toHex(code);
     
     return `-- RobloxGuard Protected Script
 -- Do not modify this code
-local _=[[${scrambled}]]
-local function d(s)
-  local r=""
-  for i=#s,1,-1 do r=r..s:sub(i,i) end
-  return r
+
+local _H = "${hexEncoded}"
+
+local function fromHex(h)
+    local s = ""
+    for i = 1, #h, 2 do
+        local byte = tonumber(h:sub(i, i + 1), 16)
+        if byte then
+            s = s .. string.char(byte)
+        end
+    end
+    return s
 end
-local function b64d(s)
-  local b='ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/'
-  s=string.gsub(s,'[^'..b..'=]','')
-  return(s:gsub('.',function(x)
-    if x=='=' then return '' end
-    local r,f='',(b:find(x)-1)
-    for i=6,1,-1 do r=r..(f%2^i-f%2^(i-1)>0 and '1' or '0') end
-    return r
-  end):gsub('%d%d%d?%d?%d?%d?%d?%d?',function(x)
-    if #x~=8 then return '' end
-    local c=0
-    for i=1,8 do c=c+(x:sub(i,i)=='1' and 2^(8-i) or 0) end
-    return string.char(c)
-  end))
-end
-loadstring(b64d(d(_)))()`;
+
+local decoded = fromHex(_H)
+local fn, err = loadstring(decoded)
+if fn then
+    fn()
+else
+    warn("[RobloxGuard] Script error: " .. tostring(err))
+end`;
   };
 
   const handleObfuscate = async () => {
