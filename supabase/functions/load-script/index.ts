@@ -23,7 +23,6 @@ function checkRateLimit(identifier: string, maxRequests: number, windowMs: numbe
 
 // Input validation
 const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-const HWID_REGEX = /^[A-Z0-9]{4}-[A-Z0-9]{4}-[A-Z0-9]{4}-[A-Z0-9]{4}$/;
 const KEY_REGEX = /^[A-Z0-9]{5}-[A-Z0-9]{5}-[A-Z0-9]{5}-[A-Z0-9]{5}$/;
 
 function validateScriptId(scriptId: string | null | undefined): boolean {
@@ -31,7 +30,8 @@ function validateScriptId(scriptId: string | null | undefined): boolean {
 }
 
 function validateHwid(hwid: string | null | undefined): boolean {
-  return typeof hwid === 'string' && hwid.length >= 10 && hwid.length <= 128 && HWID_REGEX.test(hwid);
+  // Accept any alphanumeric string between 8-256 characters (flexible for different executors)
+  return typeof hwid === 'string' && hwid.length >= 8 && hwid.length <= 256 && /^[A-Za-z0-9_\-]+$/.test(hwid);
 }
 
 function validateKey(key: string | null | undefined): boolean {
@@ -120,8 +120,11 @@ serve(async (req) => {
       );
     }
 
-    // Check key validity
-    const { data: keyData, error: keyError } = await supabase
+    // Check key validity - try exact match first, then permanent embedded
+    let keyData = null;
+    let keyError = null;
+    
+    const { data: exactMatch, error: exactError } = await supabase
       .from('hwid_keys')
       .select('*')
       .eq('script_id', scriptId)
@@ -129,6 +132,24 @@ serve(async (req) => {
       .eq('access_key', key)
       .eq('is_active', true)
       .maybeSingle();
+    
+    if (exactMatch) {
+      keyData = exactMatch;
+      keyError = exactError;
+    } else {
+      // Check for permanent embedded key
+      const { data: permanentMatch, error: permanentError } = await supabase
+        .from('hwid_keys')
+        .select('*')
+        .eq('script_id', scriptId)
+        .eq('hwid', 'PERMANENT_EMBEDDED')
+        .eq('access_key', key)
+        .eq('is_active', true)
+        .maybeSingle();
+      
+      keyData = permanentMatch;
+      keyError = permanentError;
+    }
 
     if (keyError || !keyData) {
       console.error('Key validation failed');
