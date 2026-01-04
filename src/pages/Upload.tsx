@@ -1,28 +1,66 @@
 import { useState } from "react";
-import { Upload as UploadIcon, FileCode, Shield, Clock, Loader2, ToggleLeft, ToggleRight } from "lucide-react";
+import { Upload as UploadIcon, FileCode, Shield, Clock, Loader2, ToggleLeft, ToggleRight, Lock, Infinity } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Switch } from "@/components/ui/switch";
+import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import Navbar from "@/components/Navbar";
 import CodeBlock from "@/components/CodeBlock";
 import { toast } from "@/hooks/use-toast";
 import { supabase } from "@/integrations/supabase/client";
 
+type KeySystemType = "disabled" | "dynamic" | "permanent";
+type ExpiryUnit = "hours" | "days" | "months" | "years";
+
 const Upload = () => {
   const [scriptName, setScriptName] = useState("");
   const [scriptCode, setScriptCode] = useState("");
-  const [expiry, setExpiry] = useState("168"); // Default 7 days in hours
-  const [keySystemEnabled, setKeySystemEnabled] = useState(true);
+  const [keySystemType, setKeySystemType] = useState<KeySystemType>("dynamic");
+  const [expiryValue, setExpiryValue] = useState("24");
+  const [expiryUnit, setExpiryUnit] = useState<ExpiryUnit>("hours");
+  const [permanentKey, setPermanentKey] = useState("");
   const [isProcessing, setIsProcessing] = useState(false);
   const [loaderScript, setLoaderScript] = useState<string | null>(null);
   const [scriptId, setScriptId] = useState<string | null>(null);
 
-  // Simple obfuscation function (in production, use a real obfuscator)
+  // Calculate expiry in hours based on value and unit
+  const calculateExpiryHours = (): number => {
+    const value = parseInt(expiryValue) || 0;
+    if (value <= 0) return 24; // Default to 24 hours
+    
+    switch (expiryUnit) {
+      case "hours":
+        return value;
+      case "days":
+        return value * 24;
+      case "months":
+        return value * 24 * 30;
+      case "years":
+        return value * 24 * 365;
+      default:
+        return 24;
+    }
+  };
+
+  // Generate a random permanent key
+  const generatePermanentKey = () => {
+    const chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
+    const segments = [];
+    for (let i = 0; i < 4; i++) {
+      let segment = "";
+      for (let j = 0; j < 5; j++) {
+        segment += chars.charAt(Math.floor(Math.random() * chars.length));
+      }
+      segments.push(segment);
+    }
+    setPermanentKey(segments.join("-"));
+  };
+
+  // Simple obfuscation function
   const obfuscateScript = (code: string): string => {
-    // Base64 encode with some modifications
     const encoded = btoa(unescape(encodeURIComponent(code)));
     const scrambled = encoded.split('').reverse().join('');
     
@@ -62,10 +100,18 @@ loadstring(b64d(d(_)))()`;
       return;
     }
 
+    if (keySystemType === "permanent" && !permanentKey.trim()) {
+      toast({
+        title: "Error",
+        description: "Mohon generate atau masukkan permanent key.",
+        variant: "destructive",
+      });
+      return;
+    }
+
     setIsProcessing(true);
     
     try {
-      // Get current user
       const { data: { user }, error: userError } = await supabase.auth.getUser();
       
       if (userError || !user) {
@@ -78,19 +124,14 @@ loadstring(b64d(d(_)))()`;
         return;
       }
 
-      // Obfuscate the script
       const obfuscated = obfuscateScript(scriptCode);
+      const expiryHours = keySystemType === "disabled" ? 0 : 
+                          keySystemType === "permanent" ? -1 : 
+                          calculateExpiryHours();
       
-      // Calculate expiry hours
-      const expiryHours = expiry === "lifetime" ? -1 : parseInt(expiry);
-      
-      // Get the Supabase project URL for the edge function
       const supabaseUrl = import.meta.env.VITE_SUPABASE_URL;
-
-      // Generate loader script placeholder (will be updated with real ID)
       const tempLoader = "-- Loading...";
 
-      // Save to database with user_id
       const { data, error } = await supabase
         .from('scripts')
         .insert({
@@ -99,7 +140,7 @@ loadstring(b64d(d(_)))()`;
           original_script: scriptCode,
           obfuscated_script: obfuscated,
           loader_script: tempLoader,
-          key_system_enabled: keySystemEnabled,
+          key_system_enabled: keySystemType !== "disabled",
           key_expiry_hours: expiryHours
         })
         .select()
@@ -109,14 +150,93 @@ loadstring(b64d(d(_)))()`;
         throw error;
       }
 
-      // Generate actual loader script with the real script ID
       const keyUrl = `${window.location.origin}/getkey?script=${data.id}`;
       const verifyUrl = `${supabaseUrl}/functions/v1/verify-key`;
       const loadUrl = `${supabaseUrl}/functions/v1/load-script/${data.id}`;
 
-      const finalLoader = keySystemEnabled ? `-- RobloxGuard Protected Script
+      let finalLoader: string;
+
+      if (keySystemType === "permanent") {
+        // Permanent key: embed key directly in loader, no UI needed
+        finalLoader = `-- RobloxGuard Protected Script
 -- Script: ${scriptName}
 -- ID: ${data.id}
+-- Key Type: Permanent (Embedded)
+
+local HttpService = game:GetService("HttpService")
+local Players = game:GetService("Players")
+
+local scriptId = "${data.id}"
+local embeddedKey = "${permanentKey}"
+local verifyUrl = "${verifyUrl}"
+local loadUrl = "${loadUrl}"
+
+local function getHWID()
+    local success, hwid = pcall(function()
+        return game:GetService("RbxAnalyticsService"):GetClientId()
+    end)
+    if success and hwid then return hwid end
+    
+    local player = Players.LocalPlayer
+    if player then
+        return "USER_" .. tostring(player.UserId)
+    end
+    return "FALLBACK_" .. tostring(math.random(100000, 999999))
+end
+
+local hwid = getHWID()
+print("[RobloxGuard] Verifying embedded key...")
+
+local success, response = pcall(function()
+    return HttpService:GetAsync(verifyUrl .. "?script=" .. scriptId .. "&hwid=" .. HttpService:UrlEncode(hwid) .. "&key=" .. embeddedKey)
+end)
+
+if not success then
+    warn("[RobloxGuard] Connection error: " .. tostring(response))
+    return
+end
+
+local data = HttpService:JSONDecode(response)
+if not data.valid then
+    warn("[RobloxGuard] Key invalid: " .. (data.message or "Unknown error"))
+    return
+end
+
+print("[RobloxGuard] Key valid! Loading script...")
+
+local scriptSuccess, scriptContent = pcall(function()
+    return HttpService:GetAsync(loadUrl .. "?hwid=" .. HttpService:UrlEncode(hwid) .. "&key=" .. embeddedKey)
+end)
+
+if scriptSuccess and scriptContent then
+    if string.sub(scriptContent, 1, 8) == "-- Error" then
+        warn(scriptContent)
+    else
+        print("[RobloxGuard] Script loaded successfully!")
+        loadstring(scriptContent)()
+    end
+else
+    warn("[RobloxGuard] Failed to load script")
+end`;
+
+        // Store the permanent key in database
+        const expiresAt = new Date();
+        expiresAt.setFullYear(expiresAt.getFullYear() + 100);
+        
+        await supabase.from('hwid_keys').insert({
+          script_id: data.id,
+          hwid: "PERMANENT_EMBEDDED",
+          access_key: permanentKey,
+          expires_at: expiresAt.toISOString(),
+          is_active: true
+        });
+
+      } else if (keySystemType === "dynamic") {
+        // Dynamic key: show UI for key input
+        finalLoader = `-- RobloxGuard Protected Script
+-- Script: ${scriptName}
+-- ID: ${data.id}
+-- Key Type: Dynamic
 
 local HttpService = game:GetService("HttpService")
 local Players = game:GetService("Players")
@@ -133,11 +253,15 @@ local function getHWID()
     local success, hwid = pcall(function()
         return game:GetService("RbxAnalyticsService"):GetClientId()
     end)
-    if success then return hwid end
-    return tostring(Players.LocalPlayer.UserId)
+    if success and hwid then return hwid end
+    
+    local player = Players.LocalPlayer
+    if player then
+        return "USER_" .. tostring(player.UserId)
+    end
+    return "FALLBACK_" .. tostring(math.random(100000, 999999))
 end
 
--- Check for saved key
 local savedKey = nil
 if getgenv then
     savedKey = getgenv()["RG_KEY_" .. scriptId]
@@ -152,7 +276,7 @@ local function verifyAndLoad(key, statusLabel, onSuccess, onFail)
     end
     
     local success, response = pcall(function()
-        return HttpService:GetAsync(verifyUrl .. "?script=" .. scriptId .. "&hwid=" .. hwid .. "&key=" .. key)
+        return HttpService:GetAsync(verifyUrl .. "?script=" .. scriptId .. "&hwid=" .. HttpService:UrlEncode(hwid) .. "&key=" .. key)
     end)
     
     if not success then
@@ -187,7 +311,7 @@ local function verifyAndLoad(key, statusLabel, onSuccess, onFail)
     end
     
     local scriptSuccess, scriptContent = pcall(function()
-        return HttpService:GetAsync(loadUrl .. "?hwid=" .. hwid .. "&key=" .. key)
+        return HttpService:GetAsync(loadUrl .. "?hwid=" .. HttpService:UrlEncode(hwid) .. "&key=" .. key)
     end)
     
     if scriptSuccess and scriptContent then
@@ -453,7 +577,11 @@ if savedKey then
     end
 else
     createKeyUI()
-end` : `-- RobloxGuard Protected Script
+end`;
+
+      } else {
+        // No key system
+        finalLoader = `-- RobloxGuard Protected Script
 -- Script: ${scriptName}
 -- ID: ${data.id}
 -- Key System: Disabled
@@ -474,8 +602,8 @@ if success and scriptContent then
 else
     error("[RobloxGuard] Failed to load script")
 end`;
+      }
 
-      // Update with final loader script
       await supabase
         .from('scripts')
         .update({ loader_script: finalLoader })
@@ -498,6 +626,17 @@ end`;
     } finally {
       setIsProcessing(false);
     }
+  };
+
+  const getExpiryLabel = () => {
+    const value = parseInt(expiryValue) || 0;
+    const unitLabels: Record<ExpiryUnit, string> = {
+      hours: "Jam",
+      days: "Hari",
+      months: "Bulan",
+      years: "Tahun"
+    };
+    return `${value} ${unitLabels[expiryUnit]}`;
   };
 
   return (
@@ -552,47 +691,118 @@ end`;
                 />
               </div>
 
-              <div className="flex items-center justify-between p-4 rounded-lg bg-secondary/30 border border-border">
-                <div className="flex items-center gap-3">
-                  {keySystemEnabled ? (
-                    <ToggleRight className="h-5 w-5 text-primary" />
-                  ) : (
-                    <ToggleLeft className="h-5 w-5 text-muted-foreground" />
-                  )}
-                  <div>
-                    <Label htmlFor="keySystem" className="cursor-pointer">Key System</Label>
-                    <p className="text-xs text-muted-foreground">
-                      {keySystemEnabled ? "User harus mendapatkan key untuk menjalankan script" : "Script bisa langsung dijalankan tanpa key"}
-                    </p>
+              {/* Key System Type Selection */}
+              <div className="space-y-4 p-4 rounded-lg bg-secondary/30 border border-border">
+                <Label className="flex items-center gap-2">
+                  <Shield className="h-4 w-4 text-primary" />
+                  Tipe Key System
+                </Label>
+                
+                <RadioGroup 
+                  value={keySystemType} 
+                  onValueChange={(value) => setKeySystemType(value as KeySystemType)}
+                  className="space-y-3"
+                >
+                  <div className="flex items-start space-x-3 p-3 rounded-md bg-background/50 border border-border">
+                    <RadioGroupItem value="disabled" id="disabled" className="mt-1" />
+                    <div className="flex-1">
+                      <Label htmlFor="disabled" className="cursor-pointer font-medium flex items-center gap-2">
+                        <ToggleLeft className="h-4 w-4 text-muted-foreground" />
+                        Tanpa Key System
+                      </Label>
+                      <p className="text-xs text-muted-foreground mt-1">
+                        Script bisa langsung dijalankan tanpa key
+                      </p>
+                    </div>
                   </div>
-                </div>
-                <Switch
-                  id="keySystem"
-                  checked={keySystemEnabled}
-                  onCheckedChange={setKeySystemEnabled}
-                />
+                  
+                  <div className="flex items-start space-x-3 p-3 rounded-md bg-background/50 border border-border">
+                    <RadioGroupItem value="dynamic" id="dynamic" className="mt-1" />
+                    <div className="flex-1">
+                      <Label htmlFor="dynamic" className="cursor-pointer font-medium flex items-center gap-2">
+                        <Clock className="h-4 w-4 text-primary" />
+                        Dynamic Key (dengan Expiry)
+                      </Label>
+                      <p className="text-xs text-muted-foreground mt-1">
+                        User harus generate key via web, key akan expired sesuai waktu
+                      </p>
+                    </div>
+                  </div>
+                  
+                  <div className="flex items-start space-x-3 p-3 rounded-md bg-background/50 border border-border">
+                    <RadioGroupItem value="permanent" id="permanent" className="mt-1" />
+                    <div className="flex-1">
+                      <Label htmlFor="permanent" className="cursor-pointer font-medium flex items-center gap-2">
+                        <Lock className="h-4 w-4 text-accent" />
+                        Permanent Key (Embedded)
+                      </Label>
+                      <p className="text-xs text-muted-foreground mt-1">
+                        Key sudah tertanam di loader, langsung jalan tanpa UI
+                      </p>
+                    </div>
+                  </div>
+                </RadioGroup>
               </div>
 
-              {keySystemEnabled && (
-                <div className="space-y-2">
-                  <Label htmlFor="expiry" className="flex items-center gap-2">
-                    <Clock className="h-4 w-4 text-muted-foreground" />
-                    Key Expiry
+              {/* Dynamic Key Expiry Options */}
+              {keySystemType === "dynamic" && (
+                <div className="space-y-3 p-4 rounded-lg bg-primary/5 border border-primary/20">
+                  <Label className="flex items-center gap-2">
+                    <Clock className="h-4 w-4 text-primary" />
+                    Durasi Key Expiry
                   </Label>
-                  <Select value={expiry} onValueChange={setExpiry}>
-                    <SelectTrigger className="bg-secondary/50">
-                      <SelectValue placeholder="Pilih durasi key" />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="1">1 Jam</SelectItem>
-                      <SelectItem value="6">6 Jam</SelectItem>
-                      <SelectItem value="24">1 Hari</SelectItem>
-                      <SelectItem value="168">7 Hari</SelectItem>
-                      <SelectItem value="720">30 Hari</SelectItem>
-                      <SelectItem value="8760">1 Tahun</SelectItem>
-                      <SelectItem value="lifetime">Selamanya</SelectItem>
-                    </SelectContent>
-                  </Select>
+                  <div className="flex gap-2">
+                    <Input
+                      type="number"
+                      min="1"
+                      placeholder="24"
+                      value={expiryValue}
+                      onChange={(e) => setExpiryValue(e.target.value)}
+                      className="bg-secondary/50 w-24"
+                    />
+                    <Select value={expiryUnit} onValueChange={(value) => setExpiryUnit(value as ExpiryUnit)}>
+                      <SelectTrigger className="bg-secondary/50 flex-1">
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="hours">Jam</SelectItem>
+                        <SelectItem value="days">Hari</SelectItem>
+                        <SelectItem value="months">Bulan</SelectItem>
+                        <SelectItem value="years">Tahun</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </div>
+                  <p className="text-xs text-muted-foreground">
+                    Key akan expired setelah: <span className="text-primary font-medium">{getExpiryLabel()}</span>
+                  </p>
+                </div>
+              )}
+
+              {/* Permanent Key Options */}
+              {keySystemType === "permanent" && (
+                <div className="space-y-3 p-4 rounded-lg bg-accent/5 border border-accent/20">
+                  <Label className="flex items-center gap-2">
+                    <Infinity className="h-4 w-4 text-accent" />
+                    Permanent Key (Tidak Expired)
+                  </Label>
+                  <div className="flex gap-2">
+                    <Input
+                      placeholder="XXXXX-XXXXX-XXXXX-XXXXX"
+                      value={permanentKey}
+                      onChange={(e) => setPermanentKey(e.target.value.toUpperCase())}
+                      className="bg-secondary/50 font-mono tracking-wider"
+                    />
+                    <Button
+                      type="button"
+                      variant="outline"
+                      onClick={generatePermanentKey}
+                    >
+                      Generate
+                    </Button>
+                  </div>
+                  <p className="text-xs text-muted-foreground">
+                    Key ini akan langsung tertanam di loader script. User tidak perlu input key.
+                  </p>
                 </div>
               )}
 
@@ -634,8 +844,10 @@ end`;
                     </div>
                     <CodeBlock code={loaderScript} language="lua" />
                     <p className="text-xs text-muted-foreground">
-                      {keySystemEnabled 
-                        ? "Script ini akan menampilkan UI floating untuk input key saat dijalankan. User bisa memasukkan key langsung di UI tersebut."
+                      {keySystemType === "permanent" 
+                        ? "Script akan langsung berjalan karena key sudah tertanam di loader."
+                        : keySystemType === "dynamic"
+                        ? "Script ini akan menampilkan UI floating untuk input key saat dijalankan."
                         : "Script ini bisa langsung dijalankan tanpa key."}
                     </p>
                   </div>
@@ -659,11 +871,18 @@ end`;
                 <ul className="text-xs text-muted-foreground space-y-1">
                   <li>• Script asli akan di-obfuscate dan disimpan di server</li>
                   <li>• Loader script akan memuat script dari server</li>
-                  {keySystemEnabled && (
+                  {keySystemType === "dynamic" && (
                     <>
                       <li>• UI floating akan muncul untuk input key</li>
                       <li>• Setelah key valid, script otomatis dijalankan</li>
-                      <li>• Key akan expired sesuai durasi yang kamu tentukan</li>
+                      <li>• Key akan expired setelah {getExpiryLabel()}</li>
+                    </>
+                  )}
+                  {keySystemType === "permanent" && (
+                    <>
+                      <li>• Key sudah tertanam di loader (tidak perlu input)</li>
+                      <li>• Script langsung berjalan tanpa UI key</li>
+                      <li>• Key tidak akan expired (permanen)</li>
                     </>
                   )}
                   <li>• Script asli tidak akan pernah terekspos ke user</li>

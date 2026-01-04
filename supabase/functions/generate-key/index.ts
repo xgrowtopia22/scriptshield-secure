@@ -23,14 +23,14 @@ function checkRateLimit(identifier: string, maxRequests: number, windowMs: numbe
 
 // Input validation
 const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-const HWID_REGEX = /^[A-Z0-9]{4}-[A-Z0-9]{4}-[A-Z0-9]{4}-[A-Z0-9]{4}$/;
 
 function validateScriptId(scriptId: string | null | undefined): boolean {
   return typeof scriptId === 'string' && UUID_REGEX.test(scriptId);
 }
 
 function validateHwid(hwid: string | null | undefined): boolean {
-  return typeof hwid === 'string' && hwid.length >= 10 && hwid.length <= 128 && HWID_REGEX.test(hwid);
+  // Accept any alphanumeric string between 8-256 characters (flexible for different executors)
+  return typeof hwid === 'string' && hwid.length >= 8 && hwid.length <= 256 && /^[A-Za-z0-9_\-]+$/.test(hwid);
 }
 
 function getCorsHeaders(origin: string | null): Record<string, string> {
