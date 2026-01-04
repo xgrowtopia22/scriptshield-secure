@@ -33,22 +33,11 @@ function validateHwid(hwid: string | null | undefined): boolean {
   return typeof hwid === 'string' && hwid.length >= 8 && hwid.length <= 256 && /^[A-Za-z0-9_\-]+$/.test(hwid);
 }
 
-function getCorsHeaders(origin: string | null): Record<string, string> {
-  const allowedOrigins = [
-    'https://preview--robloxx-guard.lovable.app',
-    'https://robloxx-guard.lovable.app',
-    'http://localhost:5173',
-    'http://localhost:8080'
-  ];
-  
-  const allowedOrigin = origin && allowedOrigins.includes(origin) ? origin : allowedOrigins[0];
-  
-  return {
-    'Access-Control-Allow-Origin': allowedOrigin,
-    'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
-    'Access-Control-Allow-Credentials': 'true'
-  };
-}
+// Allow all origins for Roblox executor access
+const corsHeaders = {
+  'Access-Control-Allow-Origin': '*',
+  'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
+};
 
 function generateAccessKey(): string {
   const chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
@@ -64,8 +53,6 @@ function generateAccessKey(): string {
 }
 
 serve(async (req) => {
-  const origin = req.headers.get('origin');
-  const corsHeaders = getCorsHeaders(origin);
 
   // Handle CORS preflight requests
   if (req.method === 'OPTIONS') {
@@ -222,7 +209,7 @@ serve(async (req) => {
     console.error('Error:', error);
     return new Response(
       JSON.stringify({ success: false, message: 'Server error' }),
-      { headers: { ...getCorsHeaders(null), 'Content-Type': 'application/json' }, status: 500 }
+      { headers: { ...corsHeaders, 'Content-Type': 'application/json' }, status: 500 }
     );
   }
 });
